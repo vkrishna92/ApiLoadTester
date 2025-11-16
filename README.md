@@ -207,13 +207,6 @@ Create an ECS cluster to run your load testing tasks:
    - **Infrastructure**: Choose Fargate for serverless or EC2 for more control
 5. Click **Create**
 
-**Using AWS CLI:**
-
-```bash
-# For Fargate (serverless)
-aws ecs create-cluster --cluster-name apiloadtester-cluster --region us-east-1
-```
-
 ### Step 3: Configure Task Definition
 
 Create a task definition that specifies how to run your container:
@@ -243,42 +236,6 @@ Create a task definition that specifies how to run your container:
      - Stream prefix: `ecs`
 5. Click **Create**
 
-**Using AWS CLI:**
-
-Create a JSON file `task-definition.json`:
-
-```json
-{
-  "family": "apiloadtester-task",
-  "networkMode": "awsvpc",
-  "requiresCompatibilities": ["FARGATE"],
-  "cpu": "256",
-  "memory": "512",
-  "executionRoleArn": "arn:aws:iam::<aws_account_id>:role/ecsTaskExecutionRole",
-  "containerDefinitions": [
-    {
-      "name": "apiloadtester",
-      "image": "<aws_account_id>.dkr.ecr.us-east-1.amazonaws.com/apiloadtester:latest",
-      "essential": true,
-      "logConfiguration": {
-        "logDriver": "awslogs",
-        "options": {
-          "awslogs-group": "/ecs/apiloadtester",
-          "awslogs-region": "us-east-1",
-          "awslogs-stream-prefix": "ecs"
-        }
-      }
-    }
-  ]
-}
-```
-
-Register the task definition:
-
-```bash
-aws ecs register-task-definition --cli-input-json file://task-definition.json
-```
-
 ### Step 4: Run Task with Container Overrides
 
 Run the task with specific test parameters using container overrides:
@@ -306,30 +263,6 @@ Run the task with specific test parameters using container overrides:
      ```
      (This translates to: API URL, 10 virtual users, 5 requests per VU, 60 seconds duration)
 6. Click **Create**
-
-**Using AWS CLI:**
-
-```bash
-# Run task with container command override
-aws ecs run-task \
-  --cluster apiloadtester-cluster \
-  --task-definition apiloadtester-task \
-  --launch-type FARGATE \
-  --network-configuration "awsvpcConfiguration={subnets=[subnet-xxxxx],securityGroups=[sg-xxxxx],assignPublicIp=ENABLED}" \
-  --overrides '{
-    "containerOverrides": [
-      {
-        "name": "apiloadtester",
-        "command": [
-          "https://jsonplaceholder.typicode.com/posts",
-          "10",
-          "5",
-          "60"
-        ]
-      }
-    ]
-  }'
-```
 
 ### Container Override Command Examples
 
