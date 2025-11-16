@@ -1,7 +1,12 @@
-﻿using System.Net.Http;
+﻿using System;
+using System.Net.Http;
 using System.Threading.Tasks;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics;
+using ApiLoadTester.constants;
+using Microsoft.Extensions.Logging;
+using ApiLoadTester.Services;
 
 public class Program
 {
@@ -11,45 +16,31 @@ public class Program
 
     static async Task Main(string[] args)
     {
+        // Configure logging
+        using var loggerFactory = ConfigureLogging();
+
+        // Initialize the LogHelper with a logger
+        LogHelper.Initialize(loggerFactory.CreateLogger<Program>());
+
+        // Log the start of the application
+        LogHelper.LogInfo("ApiLoadTester application starting...");
+
         // Log input arguments before validation
-        Console.WriteLine("Input Arguments:");
-        for (int i = 0; i < args.Length; i++)
+        logUnparsedArgs(args);
+
+        // 1. Validate and parse command-line arguments
+        var parsedArgs = validateAndParseArgs(args);
+        if (parsedArgs.Count == 0)
         {
-            Console.WriteLine($"Argument {i}: {args[i]}");
+            LogHelper.LogWarning("No valid arguments provided. Exiting.");
+            return; // Exit if arguments are invalid
         }
 
-        // 1. Validate command-line arguments
-        if (args.Length != 4)
-        {
-            Console.WriteLine("Usage: ApiLoadTester <apiUrl> <virtualUsers> <ratePerVU> <durationSeconds>");
-            Console.WriteLine("ERROR: Exactly 4 arguments are required.");
-            return;
-        }
-
-        // 2. Parse command-line arguments
-        string apiUrl = args[0];
-        if (!int.TryParse(args[1], out int vus))
-        {
-            Console.WriteLine("ERROR: Invalid number of virtual users.");
-            return;
-        }
-        if (!int.TryParse(args[2], out int ratePerVU))
-        {
-            Console.WriteLine("ERROR: Invalid rate per virtual user.");
-            return;
-        }
-        if (!int.TryParse(args[3], out int durationSeconds))
-        {
-            Console.WriteLine("ERROR: Invalid duration seconds.");
-            return;
-        }
-
-        Console.WriteLine($"Starting Load Test");
-        Console.WriteLine($"Virtual Users (VUs): {vus}");
-        Console.WriteLine($"Rate per VU: {ratePerVU} transactions/second");
-        Console.WriteLine($"Duration: {durationSeconds} seconds");
-        Console.WriteLine($"Target URL: {apiUrl}");
-        Console.WriteLine("--------------------------------------");
+        // 2. Extract parsed arguments
+        string apiUrl = (string)parsedArgs[MainArgsKeys.ApiUrl];
+        int vus = (int)parsedArgs[MainArgsKeys.VirtualUsers];
+        int ratePerVU = (int)parsedArgs[MainArgsKeys.RatePerVU];
+        int durationSeconds = (int)parsedArgs[MainArgsKeys.DurationSeconds];
 
         // 3. Prepare load test
         var duration = TimeSpan.FromSeconds(durationSeconds);
@@ -72,13 +63,7 @@ public class Program
         var totalFailedRequests = _failedRequests.Count;
         var overallTPS = totalSuccessfulRequests / totalDuration;
 
-        Console.WriteLine("--------------------------------------");
-        Console.WriteLine("Load Test Summary:");
-        Console.WriteLine($"Total Duration: {totalDuration:F2} seconds");
-        Console.WriteLine($"Total Successful Requests: {totalSuccessfulRequests}");
-        Console.WriteLine($"Total Failed Requests: {totalFailedRequests}");
-        Console.WriteLine($"Overall Transactions Per Second (TPS): {overallTPS:F2}");
-        Console.WriteLine("Load Test Completed.");
+        LogTestSummary(totalDuration, totalSuccessfulRequests, totalFailedRequests, overallTPS);
     }
 
     // Virtual user behavior
@@ -110,6 +95,7 @@ public class Program
             {
                 _failedRequests.Add(1);
                 LogRequest(id, null, false, ex.Message);
+                LogHelper.LogError(ex, $"VU-{id} encountered an error");
             }
 
             // Rate limiting: wait until next allowed request time
@@ -125,9 +111,93 @@ public class Program
     {
         lock (_consoleLock)
         {
-            Console.WriteLine(success
-                ? $"VU-{vuId} → {statusCode}"
-                : $"VU-{vuId} ERROR → {errorMessage ?? statusCode?.ToString()}");
+            if (success)
+            {
+                LogHelper.LogDebug("VU-{VuId} → {StatusCode}", vuId, statusCode);
+            }
+            else
+            {
+                LogHelper.LogWarning("VU-{VuId} ERROR → {ErrorMessage}", vuId, errorMessage ?? statusCode?.ToString());
+            }
         }
+    }
+
+    private static Dictionary<string, Object> validateAndParseArgs(string[] args)
+    {
+        Dictionary<string, Object> parsedArgs = new Dictionary<string, Object>();
+
+        // 1. Validate command-line arguments
+        if (args.Length != 4)
+        {
+            LogHelper.LogError(new ArgumentException("Invalid number of arguments"),
+                "Usage: ApiLoadTester <apiUrl> <virtualUsers> <ratePerVU> <durationSeconds>");
+            return parsedArgs;
+        }
+
+        // 2. Parse command-line arguments
+        string apiUrl = args[0];
+        if (!int.TryParse(args[1], out int vus))
+        {
+            LogHelper.LogError(new ArgumentException("Invalid number of virtual users"));
+            return parsedArgs;
+        }
+        if (!int.TryParse(args[2], out int ratePerVU))
+        {
+            LogHelper.LogError(new ArgumentException("Invalid rate per virtual user"));
+            return parsedArgs;
+        }
+        if (!int.TryParse(args[3], out int durationSeconds))
+        {
+            LogHelper.LogError(new ArgumentException("Invalid duration seconds"));
+            return parsedArgs;
+        }
+
+        parsedArgs[MainArgsKeys.ApiUrl] = apiUrl;
+        parsedArgs[MainArgsKeys.VirtualUsers] = vus;
+        parsedArgs[MainArgsKeys.RatePerVU] = ratePerVU;
+        parsedArgs[MainArgsKeys.DurationSeconds] = durationSeconds;
+
+        // log parsed arguments
+        LogHelper.LogInfo("Parsed Arguments:");
+        LogHelper.LogInfo($"API URL: {apiUrl}");
+        LogHelper.LogInfo($"Virtual Users: {vus}");
+        LogHelper.LogInfo($"Rate per VU: {ratePerVU}");
+        LogHelper.LogInfo($"Duration Seconds: {durationSeconds}");
+
+        return parsedArgs;
+    }
+
+    private static void logUnparsedArgs(string[] args)
+    {
+        LogHelper.LogInfo("Input Arguments:");
+        for (int i = 0; i < args.Length; i++)
+        {
+            LogHelper.LogInfo($"Argument {i}: {args[i]}");
+        }
+    }
+
+    private static void LogTestSummary(double totalDuration, int totalSuccessfulRequests, int totalFailedRequests, double overallTPS)
+    {
+        LogHelper.LogInfo("Load Test Summary:");
+        LogHelper.LogInfo($"Total Duration: {totalDuration:F2} seconds");
+        LogHelper.LogInfo($"Total Successful Requests: {totalSuccessfulRequests}");
+        LogHelper.LogInfo($"Total Failed Requests: {totalFailedRequests}");
+        LogHelper.LogInfo($"Overall Transactions Per Second (TPS): {overallTPS:F2}");
+        LogHelper.LogInfo("Load Test Completed.");
+    }
+
+    private static ILoggerFactory ConfigureLogging()
+    {
+        return LoggerFactory.Create(builder =>
+        {
+            builder
+                .AddSimpleConsole(options =>
+                {
+                    options.TimestampFormat = "HH:mm:ss ";
+                    options.SingleLine = true;
+                    options.IncludeScopes = false;
+                })
+                .SetMinimumLevel(LogLevel.Debug);
+        });
     }
 }
