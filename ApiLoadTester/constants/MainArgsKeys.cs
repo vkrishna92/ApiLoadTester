@@ -8,4 +8,5 @@ public class MainArgsKeys
     public const string VirtualUsers = "virtualUsers";
     public const string RatePerVU = "ratePerVU";
     public const string DurationSeconds = "durationSeconds";
+    public const string TestRunId = "testRunId";
 }

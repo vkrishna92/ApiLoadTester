@@ -41,6 +41,7 @@ public class Program
         int vus = (int)parsedArgs[MainArgsKeys.VirtualUsers];
         int ratePerVU = (int)parsedArgs[MainArgsKeys.RatePerVU];
         int durationSeconds = (int)parsedArgs[MainArgsKeys.DurationSeconds];
+        string testRunId = (string)parsedArgs[MainArgsKeys.TestRunId];
 
         // 3. Prepare load test
         var duration = TimeSpan.FromSeconds(durationSeconds);
@@ -64,6 +65,9 @@ public class Program
         var overallTPS = totalSuccessfulRequests / totalDuration;
 
         LogTestSummary(totalDuration, totalSuccessfulRequests, totalFailedRequests, overallTPS);
+
+        // 7. Send load test summary to SQS
+        await SendLoadTestSummaryToSqs(apiUrl, totalDuration, totalSuccessfulRequests, totalFailedRequests, overallTPS, testRunId, loggerFactory);
     }
 
     // Virtual user behavior
@@ -127,10 +131,10 @@ public class Program
         Dictionary<string, Object> parsedArgs = new Dictionary<string, Object>();
 
         // 1. Validate command-line arguments
-        if (args.Length != 4)
+        if (args.Length != 5)
         {
             LogHelper.LogError(new ArgumentException("Invalid number of arguments"),
-                "Usage: ApiLoadTester <apiUrl> <virtualUsers> <ratePerVU> <durationSeconds>");
+                "Usage: ApiLoadTester <apiUrl> <virtualUsers> <ratePerVU> <durationSeconds> <testRunId>");
             return parsedArgs;
         }
 
@@ -151,11 +155,13 @@ public class Program
             LogHelper.LogError(new ArgumentException("Invalid duration seconds"));
             return parsedArgs;
         }
+        string testRunId = args[4];
 
         parsedArgs[MainArgsKeys.ApiUrl] = apiUrl;
         parsedArgs[MainArgsKeys.VirtualUsers] = vus;
         parsedArgs[MainArgsKeys.RatePerVU] = ratePerVU;
         parsedArgs[MainArgsKeys.DurationSeconds] = durationSeconds;
+        parsedArgs[MainArgsKeys.TestRunId] = testRunId;
 
         // log parsed arguments
         LogHelper.LogInfo("Parsed Arguments:");
@@ -163,6 +169,7 @@ public class Program
         LogHelper.LogInfo($"Virtual Users: {vus}");
         LogHelper.LogInfo($"Rate per VU: {ratePerVU}");
         LogHelper.LogInfo($"Duration Seconds: {durationSeconds}");
+        LogHelper.LogInfo($"Test Run ID: {testRunId}");
 
         return parsedArgs;
     }
@@ -199,5 +206,46 @@ public class Program
                 })
                 .SetMinimumLevel(LogLevel.Debug);
         });
+    }
+
+    private static async Task SendLoadTestSummaryToSqs(
+        string targetUrl,
+        double duration,
+        int successfulRequests,
+        int failedRequests,
+        double tps,
+        string testRunId,
+        ILoggerFactory loggerFactory)
+    {
+        try
+        {
+            var queueUrl = Environment.GetEnvironmentVariable("SQS_QUEUE_URL");
+
+            if (string.IsNullOrEmpty(queueUrl))
+            {
+                LogHelper.LogError(new InvalidOperationException("SQS_QUEUE_URL environment variable not set"),
+                    "Cannot send load test summary to SQS: SQS_QUEUE_URL environment variable is not configured");
+                return;
+            }
+
+            var logger = loggerFactory.CreateLogger<Program>();
+            var sqsService = new SqsService(queueUrl, logger);
+
+            var summary = new LoadTestSummary
+            {
+                TestId = testRunId,
+                Duration = Math.Round(duration, 2),
+                SuccessfulRequests = successfulRequests,
+                FailedRequests = failedRequests,
+                Tps = Math.Round(tps, 2),
+                TargetUrl = targetUrl
+            };
+
+            await sqsService.SendLoadTestSummaryAsync(summary);
+        }
+        catch (Exception ex)
+        {
+            LogHelper.LogError(ex, "Failed to send load test summary to SQS");
+        }
     }
 }
